@@ -571,69 +571,89 @@ function calcular(){
     if(prom === null) return;
     notasTotal++;
 
-    // Cuántas notas faltan (ponderación sin asignar)
+    // prom = suma(nota*pond) / totalPond  ← promedio SOLO sobre lo ingresado
+    // sumaActual = prom * totalPond  (puntos ponderados ya obtenidos)
     const ponderado = totalPond;
     const restPond = Math.max(0, 100 - ponderado);
+    const sumaActual = prom * ponderado; // puntos ponderados acumulados
 
-    // Nota exención: promedio >= 5.0 con la ponderación actual (sobre 100)
-    // Si hay ponderación pendiente, calcula nota mínima para restPond
+    // Promedio final proyectado si saca nota X en el restPond:
+    // promFinal(x) = (sumaActual + x * restPond) / 100
+    // Para exención (≥5.0):  x = (500 - sumaActual) / restPond
+    // Para aprobación (≥4.0): x = (400 - sumaActual) / restPond
+
     let notaMinExen = null;
-    let notaMinAprueba = null; // para examen: nota examen que da prom final >= 4.0
+    let notaMinAprueba = null;
     let estado, pillClass, pillText;
 
     if(ponderado >= 100){
-      // notas completas
+      // Todas las notas ingresadas, promedio final = prom
       if(prom >= 5.0){
-        estado='ok'; pillClass='pill-ok'; pillText='✓ Eximido';
-        eximidos++;
+        estado='ok'; pillClass='pill-ok'; pillText='✓ Eximido'; eximidos++;
       } else if(prom >= 4.0){
-        estado='warn'; pillClass='pill-warn'; pillText='⚠ Debe rendir examen';
-        conExamen++;
-        // nota examen para aprobar con 4.0:
-        // promFinal = 0.6*promNotas + 0.4*notaExamen >= 4.0
-        notaMinAprueba = (4.0 - 0.6*prom)/0.4;
+        estado='warn'; pillClass='pill-warn'; pillText='⚠ Debe rendir examen'; conExamen++;
+        // 0.6*promNotas + 0.4*examen >= 4.0
+        notaMinAprueba = (4.0 - 0.6*prom) / 0.4;
+        if(notaMinAprueba < 1) notaMinAprueba = 1;
       } else {
-        estado='danger'; pillClass='pill-danger'; pillText='✗ Reprueba (promedio < 4.0)';
-        notaMinAprueba = (4.0 - 0.6*prom)/0.4;
-        if(notaMinAprueba > 7) notaMinAprueba = null; // imposible
+        estado='danger'; pillClass='pill-danger'; pillText='✗ Reprueba sin examen';
+        notaMinAprueba = (4.0 - 0.6*prom) / 0.4;
+        if(notaMinAprueba > 7){ notaMinAprueba = null; }
       }
     } else {
-      // hay ponderación pendiente → calcula nota mínima necesaria
-      // promTotal = (suma_actual + notaMin * restPond) / 100
-      // para exención: (suma_actual + x * restPond) / 100 >= 5.0 => x = (500 - suma_actual)/restPond
-      const sumaActual = prom * ponderado;
-      notaMinExen = (500 - sumaActual)/restPond;
+      // Hay ponderación pendiente
+      // ¿Ya el promedio actual supera 5.0 incluso con lo parcial?
+      // promFinal mínimo (si saca 1.0 en lo restante):
+      const promSi1 = (sumaActual + 1.0*restPond) / 100;
+      // promFinal máximo (si saca 7.0 en lo restante):
+      const promSi7 = (sumaActual + 7.0*restPond) / 100;
 
-      if(prom >= 5.0 && restPond === 0){
-        estado='ok'; pillClass='pill-ok'; pillText='✓ Eximido'; eximidos++;
-      } else if(notaMinExen <= 7.0){
-        estado='warn'; pillClass='pill-warn'; pillText='🎯 Puede eximirse'; 
+      // Nota necesaria para exención sobre 100% total:
+      notaMinExen = restPond > 0 ? (500 - sumaActual) / restPond : null;
+      // Nota necesaria para aprobación sobre 100% total:
+      const notaMinAprob100 = restPond > 0 ? (400 - sumaActual) / restPond : null;
+
+      if(notaMinExen !== null && notaMinExen <= 1.0){
+        // Ya está eximido con cualquier nota
+        estado='ok'; pillClass='pill-ok'; pillText='✓ Eximido (promedio asegurado)'; eximidos++;
+        notaMinExen = null;
+      } else if(notaMinExen !== null && notaMinExen <= 7.0){
+        estado='warn'; pillClass='pill-warn'; pillText='🎯 Puede eximirse';
+      } else if(promSi7 >= 5.0){
+        // con 7.0 llega a exención
+        estado='warn'; pillClass='pill-warn'; pillText='🎯 Puede eximirse con nota alta';
+        notaMinExen = (500 - sumaActual) / restPond;
+      } else if(promSi7 >= 4.0){
+        estado='warn'; pillClass='pill-warn'; pillText='⚠ Exención imposible — puede aprobar';
+        conExamen++;
+        notaMinExen = null;
+        notaMinAprueba = notaMinAprob100 !== null && notaMinAprob100 >= 1 ? notaMinAprob100 : null;
       } else {
-        // imposible eximirse, puede igual aprobar
-        const promSiSaca7 = (sumaActual + 7*restPond)/100;
-        if(promSiSaca7 >= 4.0){
-          estado='warn'; pillClass='pill-warn'; pillText='⚠ Exención imposible — puede aprobar';
-          conExamen++;
-          notaMinAprueba = (4.0*100 - sumaActual)/restPond;
-        } else {
-          estado='danger'; pillClass='pill-danger'; pillText='✗ En riesgo de reprobar';
-        }
+        estado='danger'; pillClass='pill-danger'; pillText='✗ En riesgo de reprobar';
+        notaMinExen = null;
       }
     }
 
-    let detailsHTML = `<strong>${ponderado.toFixed(0)}%</strong> de la ponderación ingresada`;
-    if(notaMinExen !== null && notaMinExen <= 7){
-      detailsHTML += `<br>Nota mínima p/ eximirse: <strong>${notaMinExen.toFixed(2)}</strong> (en el ${restPond.toFixed(0)}% restante)`;
+    let detailsHTML = `Ponderación ingresada: <strong>${ponderado.toFixed(1)}%</strong> de 100%`;
+    if(restPond > 0){
+      detailsHTML += ` · Falta: <strong>${restPond.toFixed(1)}%</strong>`;
+    }
+    if(notaMinExen !== null && notaMinExen <= 7 && notaMinExen > 0){
+      detailsHTML += `<br>Nota mínima p/ eximirse: <strong>${notaMinExen.toFixed(2)}</strong> (promedio final = 5.0)`;
     }
     if(notaMinAprueba !== null){
-      detailsHTML += `<br>Nota mínima en examen p/ aprobar: <strong>${notaMinAprueba.toFixed(2)}</strong>`;
-      detailsHTML += `<br><span style="font-size:.7rem;opacity:.7">(Fórmula: 60% promedio + 40% examen ≥ 4.0)</span>`;
+      if(ponderado >= 100){
+        detailsHTML += `<br>Nota mínima en examen p/ aprobar: <strong>${notaMinAprueba.toFixed(2)}</strong>`;
+        detailsHTML += `<br><span style="font-size:.7rem;opacity:.7">Fórmula: 60% promedio semestral + 40% examen ≥ 4.0</span>`;
+      } else {
+        detailsHTML += `<br>Nota mínima en ev. restantes p/ aprobar: <strong>${notaMinAprueba.toFixed(2)}</strong>`;
+      }
     }
-    if(estado==='ok' && ponderado>=100){
+    if(estado==='ok'){
       detailsHTML += `<br>🎉 No necesitas rendir examen final.`;
     }
     if(notas.length > 0){
-      detailsHTML += `<br><span style="font-size:.7rem;opacity:.7">Evaluaciones: ${notas.map(n=>`${n.nombreEv} ${n.nota.toFixed(1)} (${n.pond}%)`).join(' · ')}</span>`;
+      detailsHTML += `<br><span style="font-size:.7rem;opacity:.65">Evaluaciones: ${notas.map(n=>`${n.nombreEv} ${n.nota.toFixed(1)} (${n.pond}%)`).join(' · ')}</span>`;
     }
 
     const div = document.createElement('div');
