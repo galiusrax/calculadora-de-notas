@@ -468,12 +468,15 @@ function delNotasRamo(id, e){
 function updateNotasDisplay(id){
   const nombre = document.getElementById('nr-nombre-'+id).value || ('Ramo '+id);
   document.getElementById('nr-name-disp-'+id).textContent = nombre;
-  const {prom, totalPond} = calcPromRamo(id);
+  const {prom, totalPond, pendPond} = calcPromRamo(id);
   const el = document.getElementById('nr-summary-'+id);
   if(prom !== null){
-    el.textContent = 'Promedio: '+prom.toFixed(2)+' ('+totalPond.toFixed(0)+'% ponderado)';
+    const pendStr = pendPond > 0 ? ` · ${pendPond.toFixed(0)}% pendiente` : '';
+    el.textContent = 'Promedio actual: '+prom.toFixed(2)+' ('+totalPond.toFixed(0)+'% ingresado'+pendStr+')';
+  } else if(pendPond > 0){
+    el.textContent = pendPond.toFixed(0)+'% declarado sin notas aún';
   } else {
-    el.textContent = 'Sin notas suficientes';
+    el.textContent = 'Sin notas ingresadas';
   }
 }
 
@@ -567,93 +570,98 @@ function calcular(){
 
   notasRamos.forEach(({id})=>{
     const nombre = document.getElementById('nr-nombre-'+id)?.value || ('Ramo '+id);
-    const {prom, totalPond, notas} = calcPromRamo(id);
-    if(prom === null) return;
+    const {prom, totalPond, pendPond, notas, pendientes, sumaActual} = calcPromRamo(id);
+    // Need at least one grade OR one pending row with weight to process
+    if(prom === null && pendPond === 0) return;
     notasTotal++;
 
-    // prom = suma(nota*pond) / totalPond  ← promedio SOLO sobre lo ingresado
-    // sumaActual = prom * totalPond  (puntos ponderados ya obtenidos)
-    const ponderado = totalPond;
-    const restPond = Math.max(0, 100 - ponderado);
-    const sumaActual = prom * ponderado; // puntos ponderados acumulados
+    // totalPond = ponderación de notas ya ingresadas
+    // pendPond  = ponderación de filas sin nota (evaluaciones pendientes)
+    // sumaActual = suma ponderada de notas ingresadas
+    // promedio actual (solo sobre lo ingresado):
+    const promActual = prom; // puede ser null si todas están vacías
+    const totalAsignado = totalPond + pendPond; // total declarado en la tabla
 
-    // Promedio final proyectado si saca nota X en el restPond:
-    // promFinal(x) = (sumaActual + x * restPond) / 100
-    // Para exención (≥5.0):  x = (500 - sumaActual) / restPond
-    // Para aprobación (≥4.0): x = (400 - sumaActual) / restPond
+    // Promedio final se calcula sobre totalAsignado (lo que el ramo tiene declarado)
+    // Si hay filas sin nota, necesita sacar notaMinX en esas evaluaciones:
+    // promFinal = (sumaActual + x * pendPond) / totalAsignado
+    // Para exención: x = (5.0 * totalAsignado - sumaActual) / pendPond
+    // Para aprobación: x = (4.0 * totalAsignado - sumaActual) / pendPond
 
     let notaMinExen = null;
     let notaMinAprueba = null;
     let estado, pillClass, pillText;
 
-    if(ponderado >= 100){
-      // Todas las notas ingresadas, promedio final = prom
+    const calcNotaMin = (umbral) => {
+      if(pendPond <= 0) return null;
+      return (umbral * totalAsignado - sumaActual) / pendPond;
+    };
+
+    if(pendPond <= 0){
+      // ── Todas las notas ingresadas ──
       if(prom >= 5.0){
         estado='ok'; pillClass='pill-ok'; pillText='✓ Eximido'; eximidos++;
       } else if(prom >= 4.0){
         estado='warn'; pillClass='pill-warn'; pillText='⚠ Debe rendir examen'; conExamen++;
-        // 0.6*promNotas + 0.4*examen >= 4.0
         notaMinAprueba = (4.0 - 0.6*prom) / 0.4;
         if(notaMinAprueba < 1) notaMinAprueba = 1;
+        if(notaMinAprueba > 7) notaMinAprueba = null;
       } else {
-        estado='danger'; pillClass='pill-danger'; pillText='✗ Reprueba sin examen';
+        estado='danger'; pillClass='pill-danger'; pillText='✗ Reprueba (promedio insuficiente)';
         notaMinAprueba = (4.0 - 0.6*prom) / 0.4;
-        if(notaMinAprueba > 7){ notaMinAprueba = null; }
+        if(notaMinAprueba > 7) notaMinAprueba = null;
       }
     } else {
-      // Hay ponderación pendiente
-      // ¿Ya el promedio actual supera 5.0 incluso con lo parcial?
-      // promFinal mínimo (si saca 1.0 en lo restante):
-      const promSi1 = (sumaActual + 1.0*restPond) / 100;
-      // promFinal máximo (si saca 7.0 en lo restante):
-      const promSi7 = (sumaActual + 7.0*restPond) / 100;
+      // ── Hay evaluaciones pendientes (nota vacía) ──
+      notaMinExen    = calcNotaMin(5.0);
+      const nMinApr  = calcNotaMin(4.0);
 
-      // Nota necesaria para exención sobre 100% total:
-      notaMinExen = restPond > 0 ? (500 - sumaActual) / restPond : null;
-      // Nota necesaria para aprobación sobre 100% total:
-      const notaMinAprob100 = restPond > 0 ? (400 - sumaActual) / restPond : null;
+      // promedio si saca 1.0 y 7.0 en pendientes
+      const promSi1 = (sumaActual + 1.0 * pendPond) / totalAsignado;
+      const promSi7 = (sumaActual + 7.0 * pendPond) / totalAsignado;
 
       if(notaMinExen !== null && notaMinExen <= 1.0){
-        // Ya está eximido con cualquier nota
-        estado='ok'; pillClass='pill-ok'; pillText='✓ Eximido (promedio asegurado)'; eximidos++;
+        // Exención asegurada con cualquier nota
+        estado='ok'; pillClass='pill-ok'; pillText='✓ Exención asegurada'; eximidos++;
         notaMinExen = null;
       } else if(notaMinExen !== null && notaMinExen <= 7.0){
         estado='warn'; pillClass='pill-warn'; pillText='🎯 Puede eximirse';
-      } else if(promSi7 >= 5.0){
-        // con 7.0 llega a exención
-        estado='warn'; pillClass='pill-warn'; pillText='🎯 Puede eximirse con nota alta';
-        notaMinExen = (500 - sumaActual) / restPond;
       } else if(promSi7 >= 4.0){
         estado='warn'; pillClass='pill-warn'; pillText='⚠ Exención imposible — puede aprobar';
         conExamen++;
         notaMinExen = null;
-        notaMinAprueba = notaMinAprob100 !== null && notaMinAprob100 >= 1 ? notaMinAprob100 : null;
+        notaMinAprueba = nMinApr !== null && nMinApr >= 1 && nMinApr <= 7 ? nMinApr : null;
       } else {
         estado='danger'; pillClass='pill-danger'; pillText='✗ En riesgo de reprobar';
         notaMinExen = null;
       }
     }
 
-    let detailsHTML = `Ponderación ingresada: <strong>${ponderado.toFixed(1)}%</strong> de 100%`;
-    if(restPond > 0){
-      detailsHTML += ` · Falta: <strong>${restPond.toFixed(1)}%</strong>`;
+    // ── Construir detalle ──
+    const promDisp = promActual !== null ? promActual.toFixed(2) : '—';
+    let detailsHTML = `Promedio actual: <strong>${promDisp}</strong>`;
+    if(pendPond > 0){
+      detailsHTML += ` (${totalPond.toFixed(0)}% de ${totalAsignado.toFixed(0)}% declarado)`;
     }
-    if(notaMinExen !== null && notaMinExen <= 7 && notaMinExen > 0){
-      detailsHTML += `<br>Nota mínima p/ eximirse: <strong>${notaMinExen.toFixed(2)}</strong> (promedio final = 5.0)`;
+    if(pendientes.length > 0){
+      detailsHTML += `<br>Evaluaciones pendientes: <strong>${pendientes.map(p=>`${p.nombreEv} (${p.pond}%)`).join(', ')}</strong>`;
+    }
+    if(notaMinExen !== null && notaMinExen >= 1 && notaMinExen <= 7){
+      detailsHTML += `<br>📌 Nota mínima p/ eximirse: <strong>${notaMinExen.toFixed(2)}</strong> en las evaluaciones pendientes`;
     }
     if(notaMinAprueba !== null){
-      if(ponderado >= 100){
-        detailsHTML += `<br>Nota mínima en examen p/ aprobar: <strong>${notaMinAprueba.toFixed(2)}</strong>`;
+      if(pendPond <= 0){
+        detailsHTML += `<br>📌 Nota mínima en examen p/ aprobar: <strong>${notaMinAprueba.toFixed(2)}</strong>`;
         detailsHTML += `<br><span style="font-size:.7rem;opacity:.7">Fórmula: 60% promedio semestral + 40% examen ≥ 4.0</span>`;
       } else {
-        detailsHTML += `<br>Nota mínima en ev. restantes p/ aprobar: <strong>${notaMinAprueba.toFixed(2)}</strong>`;
+        detailsHTML += `<br>📌 Nota mínima en ev. pendientes p/ aprobar: <strong>${notaMinAprueba.toFixed(2)}</strong>`;
       }
     }
     if(estado==='ok'){
       detailsHTML += `<br>🎉 No necesitas rendir examen final.`;
     }
     if(notas.length > 0){
-      detailsHTML += `<br><span style="font-size:.7rem;opacity:.65">Evaluaciones: ${notas.map(n=>`${n.nombreEv} ${n.nota.toFixed(1)} (${n.pond}%)`).join(' · ')}</span>`;
+      detailsHTML += `<br><span style="font-size:.7rem;opacity:.65">Ingresadas: ${notas.map(n=>`${n.nombreEv} ${n.nota.toFixed(1)} (${n.pond}%)`).join(' · ')}</span>`;
     }
 
     const div = document.createElement('div');
