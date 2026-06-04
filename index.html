@@ -481,22 +481,37 @@ function updateNotasDisplay(id){
 }
 
 function calcPromRamo(id){
+  // Returns:
+  //   sumaTotal  = suma(nota * pond) para notas ingresadas
+  //   pondIngresada = suma de ponderaciones con nota
+  //   pondTotal  = suma de TODAS las ponderaciones declaradas (con o sin nota)
+  //   notas[]    = evaluaciones con nota
+  //   pendientes[] = evaluaciones sin nota pero con ponderación
   const tbody = document.getElementById('notas-tbody-'+id);
-  if(!tbody) return {prom:null, totalPond:0, notas:[]};
-  let suma = 0, totalPond = 0;
-  const notas = [];
+  if(!tbody) return null;
+  let sumaTotal=0, pondIngresada=0, pondTotal=0;
+  const notas=[], pendientes=[];
   Array.from(tbody.rows).forEach((r,i)=>{
-    const nombreEv = document.getElementById('ne-'+id+'-'+(i+1))?.value || ('Ev. '+(i+1));
-    const nota = parseFloat(document.getElementById('nn-'+id+'-'+(i+1))?.value);
-    const pond = parseFloat(document.getElementById('np-'+id+'-'+(i+1))?.value);
-    if(!isNaN(nota) && !isNaN(pond) && pond > 0){
-      suma += nota * pond;
-      totalPond += pond;
-      notas.push({nombreEv, nota, pond});
+    const idx = i+1;
+    const nombreEv = (document.getElementById('ne-'+id+'-'+idx)?.value||'').trim() || ('Ev.'+idx);
+    const notaRaw  = (document.getElementById('nn-'+id+'-'+idx)?.value||'').trim();
+    const pondRaw  = (document.getElementById('np-'+id+'-'+idx)?.value||'').trim();
+    const pond = parseFloat(pondRaw);
+    if(isNaN(pond)||pond<=0) return; // fila sin ponderación → ignorar
+    pondTotal += pond;
+    const nota = parseFloat(notaRaw);
+    if(notaRaw!==''&&!isNaN(nota)){
+      sumaTotal    += nota*pond;
+      pondIngresada+= pond;
+      notas.push({nombreEv,nota,pond});
+    } else {
+      pendientes.push({nombreEv,pond});
     }
   });
-  if(totalPond === 0) return {prom:null, totalPond:0, notas:[]};
-  return {prom: suma/totalPond, totalPond, notas};
+  if(pondTotal===0) return null;
+  // Promedio sobre pondTotal (notas faltantes cuentan como 0 en la suma)
+  const promedio = sumaTotal / pondTotal;
+  return {promedio, sumaTotal, pondIngresada, pondTotal, notas, pendientes};
 }
 
 // ═══════════════════════════════════════════
@@ -520,171 +535,146 @@ function calcular(){
   // ── Asistencia ──
   const resAsist = document.getElementById('res-asistencia');
   resAsist.innerHTML = '';
-  let asistOk = 0, asistTotal = 0;
+  let asistOk=0, asistTotal=0;
 
   asistRamos.forEach(id=>{
-    const nombre = document.getElementById('ar-nombre-'+id)?.value || ('Ramo '+id);
-    const total = parseFloat(document.getElementById('ar-total-'+id)?.value)||0;
-    const asist = parseFloat(document.getElementById('ar-asist-'+id)?.value)||0;
-    const rest = parseFloat(document.getElementById('ar-rest-'+id)?.value)||0;
+    const nombre = document.getElementById('ar-nombre-'+id)?.value||('Ramo '+id);
+    const total  = parseFloat(document.getElementById('ar-total-'+id)?.value)||0;
+    const asist  = parseFloat(document.getElementById('ar-asist-'+id)?.value)||0;
+    const rest   = parseFloat(document.getElementById('ar-rest-'+id)?.value)||0;
     if(total===0) return;
     asistTotal++;
-
-    const totalSem = total + rest;
-    const pctActual = asist/total*100;
-    const pctFinal = asist/totalSem*100;
-    const clasesMin = Math.ceil(totalSem*0.75);
-    const necesita = Math.max(0, clasesMin - asist);
-    const puedeFaltar = Math.max(0, asist + rest - clasesMin);
-    const ok = pctFinal >= 75 || necesita <= rest;
+    const totalSem   = total+rest;
+    const pctActual  = asist/total*100;
+    const pctFinal   = asist/totalSem*100;
+    const clasesMin  = Math.ceil(totalSem*0.75);
+    const necesita   = Math.max(0,clasesMin-asist);
+    const puedeFalt  = Math.max(0,asist+rest-clasesMin);
+    const ok         = necesita<=rest;
     if(ok) asistOk++;
-
-    const barClass = ok ? 'bar-ok' : 'bar-danger';
-    const estado = ok ? 'ok' : 'danger';
-
+    const estado     = ok?'ok':'danger';
+    const barClass   = ok?'bar-ok':'bar-danger';
     const div = document.createElement('div');
     div.className = 'asist-result '+estado;
     div.innerHTML = `
       <div class="asist-name">${nombre}</div>
       <div class="asist-pct">${pctActual.toFixed(1)}% <span style="font-size:.9rem;font-weight:400;color:var(--muted)">actual</span></div>
       <div class="progress-wrap"><div class="progress-bar ${barClass}" style="width:0" data-w="${Math.min(pctActual,100)}"></div></div>
-      <div class="asist-info">
-        Proyección final: <strong>${pctFinal.toFixed(1)}%</strong> ·
-        ${ok
-          ? `Puedes faltar <strong>${puedeFaltar}</strong> clase(s) más`
-          : `Necesitas asistir a <strong>${necesita}</strong> clase(s) más para llegar al 75%`}
-      </div>`;
+      <div class="asist-info">Proyección final: <strong>${pctFinal.toFixed(1)}%</strong> · ${ok
+        ?`Puedes faltar <strong>${puedeFalt}</strong> clase(s) más`
+        :`Necesitas asistir a <strong>${necesita}</strong> clase(s) más`}</div>`;
     resAsist.appendChild(div);
   });
 
   setTimeout(()=>{
-    document.querySelectorAll('.progress-bar[data-w]').forEach(b=>{
-      b.style.width = b.dataset.w+'%';
-    });
-  }, 60);
+    document.querySelectorAll('.progress-bar[data-w]').forEach(b=>{b.style.width=b.dataset.w+'%';});
+  },60);
 
   // ── Notas ──
   const resNotas = document.getElementById('res-notas');
-  resNotas.innerHTML = '';
-  let eximidos = 0, conExamen = 0, notasTotal = 0;
+  resNotas.innerHTML='';
+  let eximidos=0, conExamen=0, notasTotal=0;
 
   notasRamos.forEach(({id})=>{
-    const nombre = document.getElementById('nr-nombre-'+id)?.value || ('Ramo '+id);
-    const {prom, totalPond, pendPond, notas, pendientes, sumaActual} = calcPromRamo(id);
-    // Need at least one grade OR one pending row with weight to process
-    if(prom === null && pendPond === 0) return;
+    const nombre = document.getElementById('nr-nombre-'+id)?.value||('Ramo '+id);
+    const r = calcPromRamo(id);
+    if(!r) return; // sin datos
     notasTotal++;
 
-    // totalPond = ponderación de notas ya ingresadas
-    // pendPond  = ponderación de filas sin nota (evaluaciones pendientes)
-    // sumaActual = suma ponderada de notas ingresadas
-    // promedio actual (solo sobre lo ingresado):
-    const promActual = prom; // puede ser null si todas están vacías
-    const totalAsignado = totalPond + pendPond; // total declarado en la tabla
+    const {promedio, sumaTotal, pondTotal, notas, pendientes} = r;
+    // promedio = sumaTotal/pondTotal  (notas vacías cuentan como 0)
+    // Para eximirse: promedio final >= 5.0
+    //   sumaTotal + notaMin*pendPond >= 5.0*pondTotal
+    //   notaMin = (5.0*pondTotal - sumaTotal) / pendPond
+    // Para aprobar con examen (70% presentación + 30% examen >= 4.0):
+    //   notaExamen = (4.0 - 0.70*promedio) / 0.30
 
-    // Promedio final se calcula sobre totalAsignado (lo que el ramo tiene declarado)
-    // Si hay filas sin nota, necesita sacar notaMinX en esas evaluaciones:
-    // promFinal = (sumaActual + x * pendPond) / totalAsignado
-    // Para exención: x = (5.0 * totalAsignado - sumaActual) / pendPond
-    // Para aprobación: x = (4.0 * totalAsignado - sumaActual) / pendPond
-
-    let notaMinExen = null;
-    let notaMinAprueba = null;
+    const pendPond = pendientes.reduce((a,p)=>a+p.pond,0);
+    let notaMinExen=null, notaMinExamen=null, notaMinPend=null;
     let estado, pillClass, pillText;
 
-    const calcNotaMin = (umbral) => {
-      if(pendPond <= 0) return null;
-      return (umbral * totalAsignado - sumaActual) / pendPond;
-    };
+    if(pendPond>0){
+      // Hay evaluaciones sin nota → calcular nota necesaria en ellas
+      notaMinExen  = (5.0*pondTotal - sumaTotal) / pendPond;
+      notaMinPend  = (4.0*pondTotal - sumaTotal) / pendPond; // para aprobar en notas
+    }
 
-    if(pendPond <= 0){
-      // ── Todas las notas ingresadas ──
-      if(prom >= 5.0){
+    const promSiMax = pendPond>0 ? (sumaTotal+7.0*pendPond)/pondTotal : promedio;
+
+    if(pendPond===0){
+      // Todas las notas ingresadas
+      if(promedio>=5.0){
         estado='ok'; pillClass='pill-ok'; pillText='✓ Eximido'; eximidos++;
-      } else if(prom >= 4.0){
+      } else if(promedio>=4.0){
         estado='warn'; pillClass='pill-warn'; pillText='⚠ Debe rendir examen'; conExamen++;
-        notaMinAprueba = (4.0 - 0.6*prom) / 0.4;
-        if(notaMinAprueba < 1) notaMinAprueba = 1;
-        if(notaMinAprueba > 7) notaMinAprueba = null;
+        notaMinExamen = (4.0 - 0.70*promedio)/0.30;
+        if(notaMinExamen<1) notaMinExamen=1;
+        if(notaMinExamen>7) notaMinExamen=null;
       } else {
-        estado='danger'; pillClass='pill-danger'; pillText='✗ Reprueba (promedio insuficiente)';
-        notaMinAprueba = (4.0 - 0.6*prom) / 0.4;
-        if(notaMinAprueba > 7) notaMinAprueba = null;
+        estado='danger'; pillClass='pill-danger'; pillText='✗ Reprueba — promedio insuficiente';
+        notaMinExamen = (4.0 - 0.70*promedio)/0.30;
+        if(notaMinExamen>7) notaMinExamen=null;
       }
     } else {
-      // ── Hay evaluaciones pendientes (nota vacía) ──
-      notaMinExen    = calcNotaMin(5.0);
-      const nMinApr  = calcNotaMin(4.0);
-
-      // promedio si saca 1.0 y 7.0 en pendientes
-      const promSi1 = (sumaActual + 1.0 * pendPond) / totalAsignado;
-      const promSi7 = (sumaActual + 7.0 * pendPond) / totalAsignado;
-
-      if(notaMinExen !== null && notaMinExen <= 1.0){
-        // Exención asegurada con cualquier nota
+      // Evaluaciones pendientes
+      if(notaMinExen<=1.0){
         estado='ok'; pillClass='pill-ok'; pillText='✓ Exención asegurada'; eximidos++;
-        notaMinExen = null;
-      } else if(notaMinExen !== null && notaMinExen <= 7.0){
+        notaMinExen=null;
+      } else if(notaMinExen<=7.0){
         estado='warn'; pillClass='pill-warn'; pillText='🎯 Puede eximirse';
-      } else if(promSi7 >= 4.0){
+      } else if(promSiMax>=4.0){
         estado='warn'; pillClass='pill-warn'; pillText='⚠ Exención imposible — puede aprobar';
         conExamen++;
-        notaMinExen = null;
-        notaMinAprueba = nMinApr !== null && nMinApr >= 1 && nMinApr <= 7 ? nMinApr : null;
+        notaMinExen=null;
       } else {
         estado='danger'; pillClass='pill-danger'; pillText='✗ En riesgo de reprobar';
-        notaMinExen = null;
+        notaMinExen=null; notaMinPend=null;
       }
     }
 
-    // ── Construir detalle ──
-    const promDisp = promActual !== null ? promActual.toFixed(2) : '—';
-    let detailsHTML = `Promedio actual: <strong>${promDisp}</strong>`;
-    if(pendPond > 0){
-      detailsHTML += ` (${totalPond.toFixed(0)}% de ${totalAsignado.toFixed(0)}% declarado)`;
+    // ── Detalle HTML ──
+    let det='';
+    det+=`Promedio actual: <strong>${promedio.toFixed(2)}</strong>`;
+    if(pendPond>0) det+=` <span style="opacity:.6">(${(pondTotal-pendPond).toFixed(0)}% de ${pondTotal.toFixed(0)}% — notas faltantes cuentan como 0)</span>`;
+    if(pendientes.length>0){
+      det+=`<br>⏳ Pendientes: <strong>${pendientes.map(p=>`${p.nombreEv} (${p.pond}%)`).join(', ')}</strong>`;
     }
-    if(pendientes.length > 0){
-      detailsHTML += `<br>Evaluaciones pendientes: <strong>${pendientes.map(p=>`${p.nombreEv} (${p.pond}%)`).join(', ')}</strong>`;
+    if(notaMinExen!==null&&notaMinExen>=1&&notaMinExen<=7){
+      det+=`<br>📌 Nota mín. p/ eximirse en ev. pendientes: <strong>${notaMinExen.toFixed(2)}</strong>`;
     }
-    if(notaMinExen !== null && notaMinExen >= 1 && notaMinExen <= 7){
-      detailsHTML += `<br>📌 Nota mínima p/ eximirse: <strong>${notaMinExen.toFixed(2)}</strong> en las evaluaciones pendientes`;
+    if(notaMinPend!==null&&pendPond>0&&notaMinPend>=1&&notaMinPend<=7&&estado!=='ok'){
+      det+=`<br>📌 Nota mín. en ev. pendientes p/ aprobar: <strong>${notaMinPend.toFixed(2)}</strong>`;
     }
-    if(notaMinAprueba !== null){
-      if(pendPond <= 0){
-        detailsHTML += `<br>📌 Nota mínima en examen p/ aprobar: <strong>${notaMinAprueba.toFixed(2)}</strong>`;
-        detailsHTML += `<br><span style="font-size:.7rem;opacity:.7">Fórmula: 60% promedio semestral + 40% examen ≥ 4.0</span>`;
-      } else {
-        detailsHTML += `<br>📌 Nota mínima en ev. pendientes p/ aprobar: <strong>${notaMinAprueba.toFixed(2)}</strong>`;
-      }
+    if(notaMinExamen!==null){
+      det+=`<br>📌 Nota mínima en examen p/ aprobar: <strong>${notaMinExamen.toFixed(2)}</strong>`;
+      det+=`<br><span style="font-size:.7rem;opacity:.65">70% presentación + 30% examen ≥ 4.0</span>`;
     }
-    if(estado==='ok'){
-      detailsHTML += `<br>🎉 No necesitas rendir examen final.`;
-    }
-    if(notas.length > 0){
-      detailsHTML += `<br><span style="font-size:.7rem;opacity:.65">Ingresadas: ${notas.map(n=>`${n.nombreEv} ${n.nota.toFixed(1)} (${n.pond}%)`).join(' · ')}</span>`;
+    if(estado==='ok') det+=`<br>🎉 No necesitas rendir examen final.`;
+    if(notas.length>0){
+      det+=`<br><span style="font-size:.7rem;opacity:.55">Notas: ${notas.map(n=>`${n.nombreEv} ${n.nota.toFixed(1)} (${n.pond}%)`).join(' · ')}</span>`;
     }
 
     const div = document.createElement('div');
     div.className = 'ramo-result '+estado;
     div.innerHTML = `
       <div class="rr-name">📚 ${nombre}</div>
-      <div class="rr-prom">${prom.toFixed(2)}</div>
-      <div class="rr-sub">Promedio ponderado actual</div>
+      <div class="rr-prom">${promedio.toFixed(2)}</div>
+      <div class="rr-sub">Promedio ponderado (sobre 100%)</div>
       <span class="pill ${pillClass}">${pillText}</span>
-      <div class="rr-details">${detailsHTML}</div>`;
+      <div class="rr-details">${det}</div>`;
     resNotas.appendChild(div);
   });
 
   // ── Summary ──
-  const totalRamos = Math.max(asistTotal, notasTotal);
-  document.getElementById('summary-card').innerHTML = `
-    <div class="summary-title">Resumen general · ${document.getElementById('student-name').value || 'Estudiante'}</div>
+  const totalRamos = Math.max(asistTotal,notasTotal);
+  document.getElementById('summary-card').innerHTML=`
+    <div class="summary-title">Resumen general · ${document.getElementById('student-name').value||'Estudiante'}</div>
     <div class="summary-grid">
       <div class="sum-item"><div class="sum-val" style="color:var(--accent)">${totalRamos}</div><div class="sum-key">Ramos</div></div>
       <div class="sum-item"><div class="sum-val" style="color:var(--accent3)">${asistOk}</div><div class="sum-key">Asist. OK</div></div>
       <div class="sum-item"><div class="sum-val" style="color:var(--accent3)">${eximidos}</div><div class="sum-key">Eximidos</div></div>
       <div class="sum-item"><div class="sum-val" style="color:var(--warn)">${conExamen}</div><div class="sum-key">Con examen</div></div>
-      <div class="sum-item"><div class="sum-val" style="color:var(--accent2)">${asistTotal - asistOk}</div><div class="sum-key">Asist. crítica</div></div>
+      <div class="sum-item"><div class="sum-val" style="color:var(--accent2)">${asistTotal-asistOk}</div><div class="sum-key">Asist. crítica</div></div>
     </div>`;
 
   document.getElementById('results').style.display='block';
